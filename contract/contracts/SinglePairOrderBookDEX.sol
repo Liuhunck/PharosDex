@@ -359,7 +359,8 @@ contract SinglePairOrderBookDEX {
         uint256 oid = bidIds[idx];
         orders[oid].active = false;
         // _removeAt(bidIds, idx);
-        _removeIdFromArray(bidIds, idx);
+        // _removeIdFromArray(bidIds, idx);
+        _removeIdFromArray(bidIds, oid); // ✅
     }
 
     // 把卖单（ask）在订单簿中“标记为失效（inactive）”，并从卖单数组中移除。
@@ -367,7 +368,8 @@ contract SinglePairOrderBookDEX {
         uint256 oid = askIds[idx];
         orders[oid].active = false;
         // _removeAt(askIds, idx);
-        _removeIdFromArray(askIds, idx);
+        // _removeIdFromArray(askIds, idx);
+        _removeIdFromArray(askIds, oid); // ✅
     }
 
     function _removeAt(uint256[] storage arr, uint256 idx) internal {
