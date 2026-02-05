@@ -114,7 +114,7 @@
   /* ====== addresses ====== */
   const DOGE = "0xDB3b249a3e4D52364962e4b0f45BE999Fa94cDf1";
   const USDT = "0xd85314a65BFd6Bc4CCe1AaA82C6E86350E143bbC";
-  const DEX  = "0x4963b646b9bfa31297AB605F4aB5c190B38ab702";
+  const DEX  = "0x79F051e7D5C7b05ad73d5b1452ef18D96472aDCE";
   
   /* ====== ABIs ====== */
   const ERC20_ABI = [
