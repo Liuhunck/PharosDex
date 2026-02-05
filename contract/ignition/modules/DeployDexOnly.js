@@ -9,7 +9,7 @@ module.exports = buildModule("DeployDexOnly", (m) => {
   const dex = m.contract(
     "SinglePairOrderBookDEX",
     [dogeAddr, usdtAddr],
-    { id: "DEX_USDT_DOGE_V2" }
+    { id: "DEX_USDT_DOGE_V3" }
   );
 
   return { dex };

@@ -27,6 +27,81 @@ contract SinglePairOrderBookDEX {
         bool active;
     }
 
+    // 给前端用的“订单快照”（避免返回 mapping 里的 Order storage 引用）
+    struct OrderView {
+        uint256 id;
+        Side side;
+        uint256 price;        // 1e18 scaled
+        uint256 amountBase;   // base smallest units
+        uint256 filledBase;   // base smallest units
+        uint256 remainingBase;// amountBase - filledBase
+        uint256 timestamp;
+        bool active;
+    }
+
+    /// @notice 返回当前 msg.sender 的所有活跃挂单（在 bidIds/askIds 里能找到的）
+    function getMyOpenOrders() external view returns (OrderView[] memory) {
+        return getOpenOrdersOf(msg.sender);
+    }
+
+    /// @notice 返回指定 trader 的所有活跃挂单（便于前端查别人地址）
+    function getOpenOrdersOf(address trader) public view returns (OrderView[] memory) {
+        // 先数数量（两遍遍历：第一遍计数，第二遍填充）
+        uint256 count = 0;
+
+        for (uint256 i = 0; i < bidIds.length; i++) {
+            Order storage o = orders[bidIds[i]];
+            if (o.active && o.trader == trader && o.filledBase < o.amountBase) {
+                count++;
+            }
+        }
+        for (uint256 i = 0; i < askIds.length; i++) {
+            Order storage o = orders[askIds[i]];
+            if (o.active && o.trader == trader && o.filledBase < o.amountBase) {
+                count++;
+            }
+        }
+
+        OrderView[] memory res = new OrderView[](count);
+        uint256 k = 0;
+
+        for (uint256 i = 0; i < bidIds.length; i++) {
+            Order storage o = orders[bidIds[i]];
+            if (o.active && o.trader == trader && o.filledBase < o.amountBase) {
+                uint256 rem = o.amountBase - o.filledBase;
+                res[k++] = OrderView({
+                    id: o.id,
+                    side: o.side,
+                    price: o.price,
+                    amountBase: o.amountBase,
+                    filledBase: o.filledBase,
+                    remainingBase: rem,
+                    timestamp: o.timestamp,
+                    active: o.active
+                });
+            }
+        }
+
+        for (uint256 i = 0; i < askIds.length; i++) {
+            Order storage o = orders[askIds[i]];
+            if (o.active && o.trader == trader && o.filledBase < o.amountBase) {
+                uint256 rem = o.amountBase - o.filledBase;
+                res[k++] = OrderView({
+                    id: o.id,
+                    side: o.side,
+                    price: o.price,
+                    amountBase: o.amountBase,
+                    filledBase: o.filledBase,
+                    remainingBase: rem,
+                    timestamp: o.timestamp,
+                    active: o.active
+                });
+            }
+        }
+
+        return res;
+    }
+
     uint256 public nextOrderId = 1;
     uint256 public lastTradePrice; // scaled by 1e18
 
@@ -300,6 +375,7 @@ contract SinglePairOrderBookDEX {
             _safeTransfer(address(baseToken), bestBid.trader, tradeBase);
             _safeTransfer(address(quoteToken), bestAsk.trader, tradeQuote);
 
+            // 把交易剩下的钱返给 BID 方
             // refund difference for fully filled bid (locked at bid.price but spent at tradePrice)
             if (bestBid.filledBase == bestBid.amountBase) {
                 uint256 lockedAtBid = _quoteForBase(bestBid.amountBase, bestBid.price);
