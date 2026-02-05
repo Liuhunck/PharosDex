@@ -2,26 +2,27 @@
 pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-contract SinglePairOrderBookDEX { 
-    IERC20 public immutable baseToken;  // DOGE 被交易的“标的币”  base（标的币）
-    IERC20 public immutable quoteToken; // USDT 计价币，价格以它计  quote（计价币）
-    // public：自动生成 getter：baseToken() / quoteToken()，前端可直接读
-    // immutable：只在构造函数里赋值一次，之后不能改（更安全 + 更省 gas）
+contract SinglePairOrderBookDEX {
+    IERC20 public immutable baseToken;  // DOGE
+    IERC20 public immutable quoteToken; // USDT
 
-    uint256 public constant PRICE_SCALE = 1e18;
-    // price 表示 1 个 base 值多少 quote，并乘上 1e18
+    // decimals cache (immutable => 更省 gas)
+    uint8 public immutable baseDecimals;
+    uint8 public immutable quoteDecimals;
+
+    uint256 public constant PRICE_SCALE = 1e18; // price = (quote per 1 base) * 1e18
 
     enum Side { BUY, SELL }
-    // 买卖方向枚举
 
     struct Order {
         uint256 id;
         address trader;
         Side side;
         uint256 price;      // scaled by 1e18
-        uint256 amountBase; // total base amount
-        uint256 filledBase; // filled base amount
+        uint256 amountBase; // total base amount (base smallest units)
+        uint256 filledBase; // filled base amount (base smallest units)
         uint256 timestamp;
         bool active;
     }
@@ -31,16 +32,12 @@ contract SinglePairOrderBookDEX {
 
     mapping(uint256 => Order) public orders;
 
-    // active order id arrays (sorted):
-    // bids: high price -> low price
-    // asks: low price -> high price
-    uint256[] public bidIds;
-    uint256[] public askIds;
+    uint256[] public bidIds; // high -> low
+    uint256[] public askIds; // low  -> high
 
     event LimitOrderPlaced(uint256 indexed orderId, address indexed trader, Side side, uint256 price, uint256 amountBase);
     event OrderCancelled(uint256 indexed orderId, address indexed trader);
     event Trade(uint256 indexed makerOrderId, address indexed maker, address indexed taker, Side takerSide, uint256 price, uint256 amountBase);
-    // 要做深度图 / K 线，Trade 事件是最关键的数据来源之一
 
     error InvalidAmount();
     error InvalidPrice();
@@ -52,22 +49,54 @@ contract SinglePairOrderBookDEX {
     constructor(address _base, address _quote) {
         baseToken = IERC20(_base);
         quoteToken = IERC20(_quote);
+
+        // Route B: read decimals from token contracts
+        baseDecimals = IERC20Metadata(_base).decimals();
+        quoteDecimals = IERC20Metadata(_quote).decimals();
+    }
+
+    // -------------------------
+    // Decimals-aware conversion helpers
+    // -------------------------
+
+    function _pow10(uint8 d) internal pure returns (uint256) {
+        // 10**d, d<=18 in most ERC20; even if higher, may overflow - but typical tokens are safe.
+        return 10 ** uint256(d);
+    }
+
+    /// @dev Given base amount in base smallest units and price (1e18),
+    ///      return required quote amount in quote smallest units.
+    ///      quote = base(human) * price(human quote/base)
+    function _quoteForBase(uint256 baseAmount, uint256 price) internal view returns (uint256) {
+        // baseHuman = baseAmount / 10^baseDecimals
+        // quoteHuman = baseHuman * price / 1e18
+        // quoteSmallest = quoteHuman * 10^quoteDecimals
+        // => quoteSmallest = baseAmount * price * 10^quoteDecimals / (1e18 * 10^baseDecimals)
+        return (baseAmount * price * _pow10(quoteDecimals)) / (PRICE_SCALE * _pow10(baseDecimals));
+    }
+
+    /// @dev Given quote amount in quote smallest units and price (1e18),
+    ///      return how much base in base smallest units can be bought.
+    function _baseForQuote(uint256 quoteAmount, uint256 price) internal view returns (uint256) {
+        // quoteHuman = quoteAmount / 10^quoteDecimals
+        // baseHuman  = quoteHuman / (price/1e18) = quoteHuman * 1e18 / price
+        // baseSmallest = baseHuman * 10^baseDecimals
+        // => baseSmallest = quoteAmount * 1e18 * 10^baseDecimals / (price * 10^quoteDecimals)
+        return (quoteAmount * PRICE_SCALE * _pow10(baseDecimals)) / (price * _pow10(quoteDecimals));
     }
 
     // -------------------------
     // 7 external interfaces
     // -------------------------
 
-    // 1) 市价买：用 quoteToken 最多花 maxQuoteIn 去买 baseToken
+    // 1) 市价买：最多花 maxQuoteIn(quote 最小单位) 去买 base
     function marketBuy(uint256 maxQuoteIn) external {
         if (maxQuoteIn == 0) revert InvalidAmount();
 
-        // 把 quote 先拉进来（未用完部分会退回）
         _safeTransferFrom(address(quoteToken), msg.sender, address(this), maxQuoteIn);
 
         uint256 remainingQuote = maxQuoteIn;
 
-        // 吃 ask（从最便宜开始）
         uint256 i = 0;
         while (i < askIds.length && remainingQuote > 0) {
             uint256 oid = askIds[i];
@@ -77,18 +106,16 @@ contract SinglePairOrderBookDEX {
             uint256 remainingBaseInOrder = ask.amountBase - ask.filledBase;
             if (remainingBaseInOrder == 0) { _deactivateAndRemoveAskAt(i); continue; }
 
-            // 在该价位，remainingQuote 能买到的 base = remainingQuote * SCALE / price
-            uint256 buyableBase = (remainingQuote * PRICE_SCALE) / ask.price;
+            // decimals-aware: remainingQuote 能买到多少 base
+            uint256 buyableBase = _baseForQuote(remainingQuote, ask.price);
             if (buyableBase == 0) break;
 
             uint256 tradeBase = buyableBase < remainingBaseInOrder ? buyableBase : remainingBaseInOrder;
-            uint256 tradeQuote = (tradeBase * ask.price) / PRICE_SCALE;
+            uint256 tradeQuote = _quoteForBase(tradeBase, ask.price);
 
-            // 结算：taker=msg.sender 买入 base，maker=ask.trader 卖出 base
             ask.filledBase += tradeBase;
             remainingQuote -= tradeQuote;
 
-            // 内含了调用参数 address(this) ，因为是当前合约调用的
             _safeTransfer(address(baseToken), msg.sender, tradeBase);
             _safeTransfer(address(quoteToken), ask.trader, tradeQuote);
 
@@ -103,25 +130,19 @@ contract SinglePairOrderBookDEX {
             }
         }
 
-        // 退回没花完的 quote
         if (remainingQuote > 0) {
             _safeTransfer(address(quoteToken), msg.sender, remainingQuote);
         }
-
-        // 如果你希望“必须全成交”可以打开下面这行
-        // if (remainingQuote > 0) revert InsufficientLiquidity();
     }
 
-    // 2) 市价卖：卖 amountBase 个 baseToken，换 quoteToken
+    // 2) 市价卖：卖 amountBase(base 最小单位)，换 quote
     function marketSell(uint256 amountBase) external {
         if (amountBase == 0) revert InvalidAmount();
 
-        // 先把 base 拉进来（未卖完部分会退回）
         _safeTransferFrom(address(baseToken), msg.sender, address(this), amountBase);
 
         uint256 remainingBase = amountBase;
 
-        // 吃 bid（从最高价开始）
         uint256 i = 0;
         while (i < bidIds.length && remainingBase > 0) {
             uint256 oid = bidIds[i];
@@ -132,13 +153,11 @@ contract SinglePairOrderBookDEX {
             if (remainingBaseInOrder == 0) { _deactivateAndRemoveBidAt(i); continue; }
 
             uint256 tradeBase = remainingBase < remainingBaseInOrder ? remainingBase : remainingBaseInOrder;
-            uint256 tradeQuote = (tradeBase * bid.price) / PRICE_SCALE;
+            uint256 tradeQuote = _quoteForBase(tradeBase, bid.price);
 
-            // maker=bid.trader 买入 base，taker=msg.sender 卖出 base
             bid.filledBase += tradeBase;
             remainingBase -= tradeBase;
 
-            // bid 里锁的是 quote；卖出者拿 quote；买入者拿 base
             _safeTransfer(address(quoteToken), msg.sender, tradeQuote);
             _safeTransfer(address(baseToken), bid.trader, tradeBase);
 
@@ -153,23 +172,18 @@ contract SinglePairOrderBookDEX {
             }
         }
 
-        // 退回没卖完的 base
         if (remainingBase > 0) {
             _safeTransfer(address(baseToken), msg.sender, remainingBase);
         }
-
-        // 如果你希望“必须全成交”可以打开下面这行
-        // if (remainingBase > 0) revert InsufficientLiquidity();
     }
 
-    // 3) 限价买：挂单买 amountBase，价格 price
-    // “我想以 price（USDT/DOGE）的价格，买 amountBase 个 DOGE”
+    // 3) 限价买：挂买 amountBase(base最小单位)，价格 price(1e18 标度)
     function limitBuy(uint256 price, uint256 amountBase) external returns (uint256 orderId) {
         if (price == 0) revert InvalidPrice();
         if (amountBase == 0) revert InvalidAmount();
 
-        // 锁定 quote = amountBase * price / SCALE
-        uint256 quoteToLock = (amountBase * price) / PRICE_SCALE;
+        // decimals-aware lock
+        uint256 quoteToLock = _quoteForBase(amountBase, price);
         if (quoteToLock == 0) revert InvalidAmount();
 
         _safeTransferFrom(address(quoteToken), msg.sender, address(this), quoteToLock);
@@ -179,16 +193,14 @@ contract SinglePairOrderBookDEX {
 
         emit LimitOrderPlaced(orderId, msg.sender, Side.BUY, price, amountBase);
 
-        // 可选：挂单后立刻撮合（像交易所“post-only”不是这样；这里默认允许立即撮合）
         _tryMatch();
     }
 
-    // 4) 限价卖：挂单卖 amountBase，价格 price
+    // 4) 限价卖：锁 base（不涉及 quote decimals）
     function limitSell(uint256 price, uint256 amountBase) external returns (uint256 orderId) {
         if (price == 0) revert InvalidPrice();
         if (amountBase == 0) revert InvalidAmount();
 
-        // 锁定 base
         _safeTransferFrom(address(baseToken), msg.sender, address(this), amountBase);
 
         orderId = _createOrder(Side.SELL, price, amountBase);
@@ -199,7 +211,7 @@ contract SinglePairOrderBookDEX {
         _tryMatch();
     }
 
-    // 5) 撤单：退回未成交部分（买单退 quote，卖单退 base）
+    // 5) 撤单：退回未成交部分
     function cancelOrder(uint256 orderId) external {
         Order storage o = orders[orderId];
         if (!o.active) revert NotActive();
@@ -210,14 +222,13 @@ contract SinglePairOrderBookDEX {
         uint256 remainingBase = o.amountBase - o.filledBase;
         if (remainingBase > 0) {
             if (o.side == Side.BUY) {
-                uint256 refundQuote = (remainingBase * o.price) / PRICE_SCALE;
+                uint256 refundQuote = _quoteForBase(remainingBase, o.price);
                 if (refundQuote > 0) _safeTransfer(address(quoteToken), msg.sender, refundQuote);
             } else {
                 _safeTransfer(address(baseToken), msg.sender, remainingBase);
             }
         }
 
-        // 从数组里移除（O(n)）
         if (o.side == Side.BUY) {
             _removeIdFromArray(bidIds, orderId);
         } else {
@@ -227,13 +238,10 @@ contract SinglePairOrderBookDEX {
         emit OrderCancelled(orderId, msg.sender);
     }
 
-    // 6) 获取当前成交价
     function getLastPrice() external view returns (uint256) {
         return lastTradePrice;
     }
 
-    // 7) 获取订单簿深度：返回 topN 档的聚合深度（价格、剩余量）
-    // 返回值：bidPrices, bidSizes, askPrices, askSizes
     function getOrderBookDepth(uint256 topN)
         external
         view
@@ -264,7 +272,6 @@ contract SinglePairOrderBookDEX {
         });
     }
 
-    // 简化撮合：只要 bestBid >= bestAsk 就持续撮合
     function _tryMatch() internal {
         while (bidIds.length > 0 && askIds.length > 0) {
             Order storage bestBid = orders[bidIds[0]];
@@ -283,26 +290,20 @@ contract SinglePairOrderBookDEX {
 
             uint256 tradeBase = bidRemain < askRemain ? bidRemain : askRemain;
 
-            // 价格选择：常见做法是用 maker 价（这里让 ask 作为 maker 时用 ask 价；bid 作为 maker 时用 bid 价）
-            // 为了 demo 简洁：用 bestAsk 价（更像“taker 吃 ask”）
+            // demo: use bestAsk price
             uint256 tradePrice = bestAsk.price;
-            uint256 tradeQuote = (tradeBase * tradePrice) / PRICE_SCALE;
-            // 这里选的是 bestAsk 价（也就是“吃卖盘的价格”）。
+            uint256 tradeQuote = _quoteForBase(tradeBase, tradePrice);
 
-            // 资金结算：
-            // - 买单锁 quote，卖单锁 base
-            // - 买家得到 base，卖家得到 quote
             bestBid.filledBase += tradeBase;
             bestAsk.filledBase += tradeBase;
 
             _safeTransfer(address(baseToken), bestBid.trader, tradeBase);
             _safeTransfer(address(quoteToken), bestAsk.trader, tradeQuote);
 
-            // 买单可能因为 tradePrice < bid.price 产生“锁多了”的quote，需要在完全成交/撤单时退
-            // 这里：当买单完全成交时，退回多锁的部分（差价）
+            // refund difference for fully filled bid (locked at bid.price but spent at tradePrice)
             if (bestBid.filledBase == bestBid.amountBase) {
-                uint256 lockedAtBid = (bestBid.amountBase * bestBid.price) / PRICE_SCALE;
-                uint256 spentAtAsk = (bestBid.amountBase * tradePrice) / PRICE_SCALE;
+                uint256 lockedAtBid = _quoteForBase(bestBid.amountBase, bestBid.price);
+                uint256 spentAtAsk = _quoteForBase(bestBid.amountBase, tradePrice);
                 if (lockedAtBid > spentAtAsk) {
                     _safeTransfer(address(quoteToken), bestBid.trader, lockedAtBid - spentAtAsk);
                 }
@@ -326,7 +327,6 @@ contract SinglePairOrderBookDEX {
         uint256 n = bidIds.length;
         bidIds.push(orderId);
 
-        // 插入排序：price desc, timestamp asc
         uint256 i = n;
         while (i > 0) {
             Order storage prev = orders[bidIds[i - 1]];
@@ -343,7 +343,6 @@ contract SinglePairOrderBookDEX {
         uint256 n = askIds.length;
         askIds.push(orderId);
 
-        // 插入排序：price asc, timestamp asc
         uint256 i = n;
         while (i > 0) {
             Order storage prev = orders[askIds[i - 1]];
@@ -358,31 +357,13 @@ contract SinglePairOrderBookDEX {
     function _deactivateAndRemoveBidAt(uint256 idx) internal {
         uint256 oid = bidIds[idx];
         orders[oid].active = false;
-        // _removeAt(bidIds, idx);
-        // _removeIdFromArray(bidIds, idx);
-        _removeIdFromArray(bidIds, oid); // ✅
+        _removeIdFromArray(bidIds, oid);
     }
 
-    // 把卖单（ask）在订单簿中“标记为失效（inactive）”，并从卖单数组中移除。
     function _deactivateAndRemoveAskAt(uint256 idx) internal {
         uint256 oid = askIds[idx];
         orders[oid].active = false;
-        // _removeAt(askIds, idx);
-        // _removeIdFromArray(askIds, idx);
-        _removeIdFromArray(askIds, oid); // ✅
-    }
-
-    function _removeAt(uint256[] storage arr, uint256 idx) internal {
-        uint256 last = arr.length - 1;
-        if (idx != last) arr[idx] = arr[last];
-        arr.pop();
-
-        // 注意：这里会破坏排序；为了 demo 简洁，我们只在 idx=0 的时候用，
-        // 但 swap-pop 会打乱顺序，所以我们改用 O(n) 左移保持顺序：
-        // 由于上面写了 swap-pop，这里做一个“保序删除”更正确
-        // ——为避免重复 pop，我们直接用保序版本替换上面的 swap-pop。
-
-        // 你要的是正确排序，所以用下面这个保序版本替换：
+        _removeIdFromArray(askIds, oid);
     }
 
     function _removeIdFromArray(uint256[] storage arr, uint256 id) internal {
@@ -398,7 +379,6 @@ contract SinglePairOrderBookDEX {
         }
     }
 
-    // 深度聚合：把相同价位的 remainingBase 累加，取 topN 档
     function _aggregateDepth(uint256[] storage ids, uint256 topN)
         internal
         view
@@ -420,7 +400,6 @@ contract SinglePairOrderBookDEX {
             uint256 p = o.price;
             uint256 sum = 0;
 
-            // 聚合相同价位
             uint256 k = i;
             while (k < ids.length) {
                 Order storage ok = orders[ids[k]];
@@ -437,8 +416,6 @@ contract SinglePairOrderBookDEX {
 
             i = k;
         }
-
-        // 如果不足 topN，尾部默认 0
     }
 
     // -------------------------
@@ -446,16 +423,14 @@ contract SinglePairOrderBookDEX {
     // -------------------------
 
     function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
-        (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, amount));
+        (bool ok, bytes memory data) =
+            token.call(abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, amount));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
-    // revert 的意思是：立刻终止当前交易，并把本次执行中对链上状态的所有修改全部撤销。
 
     function _safeTransfer(address token, address to, uint256 amount) internal {
-        (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
+        (bool ok, bytes memory data) =
+            token.call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
-    // transferFrom 用来“从用户那里把钱拉进合约”
-    // transfer 用来“把合约自己托管的钱打给别人”
-    // msg.sender 是“当前这一步函数调用的直接发起者地址”
 }
