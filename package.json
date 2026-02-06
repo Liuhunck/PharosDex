@@ -6,12 +6,11 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "deploy": "node scripts/deploy-memehub-pharos.js",
-    "deploy:pharos": "node scripts/deploy-pharos.js",
-    "deploy:memehub:pharos": "node scripts/deploy-memehub-pharos.js",
-    "verify": "node scripts/verify-memehub-pharos.js",
-    "verify:pharos": "node scripts/verify-pharos.js",
-    "verify:memehub:pharos": "node scripts/verify-memehub-pharos.js"
+    "deploy:mockcoin:usdt": "node scripts/deploy-mockcoin-usdt.js",
+    "deploy:mockcoin:doge": "node scripts/deploy-mockcoin-doge.js",
+    "deploy:memehub": "node scripts/deploy-memehub-pharos.js",
+    "verify:memehub": "node scripts/verify-memehub-pharos.js",
+    "verify:mockcoin": "node scripts/verify-mockcoin.js"
   },
   "devDependencies": {
     "@chainlink/env-enc": "^1.0.5",
