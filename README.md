@@ -37,3 +37,44 @@ npx hardhat ignition deploy ./ignition/modules/Lock.js
 ```shell
 npx hardhat test
 ```
+
+## MultiBaseOrderBookDEXVaultLevels（多 Base 单 Quote + 按价位分桶）
+
+本仓库还包含一个多 baseToken（共享同一个 quoteToken）的订单簿撮合合约：`MultiBaseOrderBookDEXVaultLevels`。
+
+-   资金模型：充值/提现（vault 内部账本），撮合只改内部余额
+-   订单簿存储：按价格档位（price level）分桶 + 同价 FIFO 队列
+-   行情：最近成交价按 base 细分：`getLastPriceFor(base)` / `lastTradePriceForBase(base)`
+
+### 编译
+
+```shell
+npm run compile
+```
+
+说明：已在 hardhat 配置中开启 Solidity optimizer（否则该合约字节码可能超过部署大小限制）。
+
+### 部署到 Pharos Atlantic
+
+准备环境变量（与现有脚本一致）：
+
+-   `PHAROS_ATLANTIC_URL`：RPC
+-   `TEST_ACCOUNT_0`：部署私钥
+
+部署命令（需要提供 quote token 地址）：
+
+```shell
+npm run deploy:orderbook:levels -- --quote <QUOTE_TOKEN_ADDRESS>
+```
+
+部署信息会写入：
+
+-   `deployments/pharos_atlantic.MultiBaseOrderBookDEXVaultLevels.latest.json`
+
+### Verify
+
+```shell
+npm run verify:orderbook:levels
+```
+
+可选：如果 verify API 需要鉴权，设置 `PHAROS_VERIFY_AUTH` 环境变量。
