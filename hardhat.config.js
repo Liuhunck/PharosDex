@@ -9,7 +9,15 @@ const TEST_ACCOUNT_0 = process.env.TEST_ACCOUNT_0;
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-    solidity: "0.8.28",
+    solidity: {
+        version: "0.8.28",
+        settings: {
+            optimizer: {
+                enabled: true,
+                runs: 200,
+            },
+        },
+    },
     defaultNetwork: "hardhat",
     networks: {
         eth_sepolia: {
