@@ -156,7 +156,8 @@ import { ethers } from "ethers";
 /* ====== addresses (replace with yours) ====== */
 const DOGE = "0xd18d98fdFaBE86a7AD0114a9985F75f9FD6992DE";
 const USDT = "0x4a3FEA9668eE4a2802EaBf4808dFCdEBc474439e";
-const DEX  = "0xEd6b84B9FC05370C9E88C706DeA0eC37948fBC1C";
+// const DEX  = "0xEd6b84B9FC05370C9E88C706DeA0eC37948fBC1C";
+const DEX  = "0x887D9Af1241a176107d31Bb3C69787DFff6dbaD8";
 
 /* ====== ABIs ====== */
 const ERC20_ABI = [
