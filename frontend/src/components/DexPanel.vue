@@ -385,7 +385,7 @@ async function refreshAllowances() {
   usdtAllowance.value = await usdt.allowance(account.value, DEX);
   dogeAllowance.value = await doge.allowance(account.value, DEX);
   usdtBalance.value = await dex.quoteBalance(account.value);
-  dogeBalance.value = await dex.baseBalance(DOGE, account.value);
+  dogeBalance.value = await dex.baseBalance(account.value, DOGE);
 }
 
 // ✅ new
@@ -395,12 +395,13 @@ async function refreshMyOrders() {
     return;
   }
 
-  const raw = await dex.getMyOpenOrders(); // OrderView[]
+  const raw = await dex.getMyOpenOrdersFor(DOGE); // OrderView[]
 
   myOrders.value = raw.map((o) => {
     const sideNum = Number(o.side); // BUY=0, SELL=1
     return {
       id: o.id,
+      baseToken: o.baseToken,
       side: o.side,
       price: o.price,
       amountBase: o.amountBase,
