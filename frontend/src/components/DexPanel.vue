@@ -49,6 +49,8 @@
       <button @click="approveDOGE" :disabled="!account || txBusy">Approve DOGE</button>
       <div>USDT allowance: {{ usdtAllowanceDisplay }}</div>
       <div>DOGE allowance: {{ dogeAllowanceDisplay }}</div>
+      <div>USDT balance: {{ usdtBalanceDisplay }}</div>
+      <div>DOGE balance: {{ dogeBalanceDisplay }}</div>
     </div>
 
     <hr />
@@ -166,25 +168,63 @@ const ERC20_ABI = [
 ];
 
 const DEX_ABI = [
+  // Errors
   "error InvalidAmount()",
   "error InvalidPrice()",
   "error TransferFailed()",
-  "error InsufficientLiquidity()",
+  "error InsufficientBalance()",
+  "error NotActive()",
+  "error NotOwner()",
+  "error UnsupportedBaseToken()",
 
-  "function marketBuy(uint256 maxQuoteIn)",
-  "function marketSell(uint256 amountBase)",
-  "function limitBuy(uint256 price, uint256 amountBase)",
-  "function limitSell(uint256 price, uint256 amountBase)",
+  // Multi-base functions (需要 base 参数)
+  "function marketBuyFor(address base, uint256 maxQuoteIn)",
+  "function marketSellFor(address base, uint256 amountBase)",
+  "function limitBuyFor(address base, uint256 price, uint256 amountBase) returns (uint256 orderId)",
+  "function limitSellFor(address base, uint256 price, uint256 amountBase) returns (uint256 orderId)",
   "function cancelOrder(uint256 orderId)",
 
-  "function getLastPrice() view returns (uint256)",
-  "function getOrderBookDepth(uint256 topN) view returns (uint256[] bidPrices, uint256[] bidSizes, uint256[] askPrices, uint256[] askSizes)",
+  // Deposit/Withdraw functions
+  "function depositBaseFor(address base, uint256 amount)",
+  "function withdrawBaseFor(address base, uint256 amount)",
+  "function depositQuote(uint256 amount)",
+  "function withdrawQuote(uint256 amount)",
 
-  // ✅ new view functions (OrderView struct as tuple)
-  "function getMyOpenOrders() view returns (tuple(uint256 id,uint8 side,uint256 price,uint256 amountBase,uint256 filledBase,uint256 remainingBase,uint256 timestamp,bool active)[])",
-  "function getOpenOrdersOf(address trader) view returns (tuple(uint256 id,uint8 side,uint256 price,uint256 amountBase,uint256 filledBase,uint256 remainingBase,uint256 timestamp,bool active)[])",
+  // View functions
+  "function getLastPriceFor(address base) view returns (uint256)",
+  "function getOrderBookDepthFor(address base, uint256 topN) view returns (uint256[] bidPrices, uint256[] bidSizes, uint256[] askPrices, uint256[] askSizes)",
+  
+  // Order view functions (multi-base version)
+  "function getMyOpenOrdersFor(address base) view returns (tuple(uint256 id, address baseToken, uint8 side, uint256 price, uint256 amountBase, uint256 filledBase, uint256 remainingBase, uint256 timestamp, bool active)[])",
+  "function getOpenOrdersOfFor(address trader, address base) view returns (tuple(uint256 id, address baseToken, uint8 side, uint256 price, uint256 amountBase, uint256 filledBase, uint256 remainingBase, uint256 timestamp, bool active)[])",
+  
+  // Support management
+  "function supportBaseToken(address base)",
+  "function getSupportedBases() view returns (address[])",
+  "function supportedBasesLength() view returns (uint256)",
+  "function supportedBaseAt(uint256 index) view returns (address)",
 
-  "event Trade(uint256,address,address,uint8,uint256,uint256)",
+  // Balance views
+  "function quoteBalance(address) view returns (uint256)",
+  "function baseBalance(address, address) view returns (uint256)",
+  
+  // Immutables
+  "function quoteToken() view returns (address)",
+  "function quoteDecimals() view returns (uint8)",
+  "function PRICE_SCALE() view returns (uint256)",
+
+  // Owner functions
+  "function owner() view returns (address)",
+  "function transferOwnership(address newOwner)",
+  "function renounceOwnership()",
+
+  // Events
+  "event Trade(uint256 indexed makerOrderId, address indexed maker, address indexed taker, uint8 takerSide, uint256 price, uint256 amountBase)",
+  "event LimitOrderPlaced(uint256 indexed orderId, address indexed trader, uint8 side, uint256 price, uint256 amountBase)",
+  "event OrderCancelled(uint256 indexed orderId, address indexed trader)",
+  "event Deposited(address indexed trader, address indexed token, uint256 amount)",
+  "event Withdrawn(address indexed trader, address indexed token, uint256 amount)",
+  "event BaseTokenSupported(address indexed baseToken, uint8 decimals)"
 ];
 
 /* ====== wallet state ====== */
@@ -214,6 +254,8 @@ const asks = ref([]);
 
 const usdtAllowance = ref(0n);
 const dogeAllowance = ref(0n);
+const usdtBalance = ref(0n);
+const dogeBalance = ref(0n);
 
 // ✅ my open orders
 const myOrders = ref([]);
@@ -234,6 +276,8 @@ const lastPriceDisplay = computed(() => ethers.formatUnits(lastPriceRaw.value ||
 
 const usdtAllowanceDisplay = computed(() => ethers.formatUnits(usdtAllowance.value || 0n, usdtDecimals.value));
 const dogeAllowanceDisplay = computed(() => ethers.formatUnits(dogeAllowance.value || 0n, dogeDecimals.value));
+const usdtBalanceDisplay = computed(() => ethers.formatUnits(usdtBalance.value || 0n, usdtDecimals.value));
+const dogeBalanceDisplay = computed(() => ethers.formatUnits(dogeBalance.value || 0n, dogeDecimals.value));
 
 /* ====== helpers ====== */
 function toScaledPrice(p) {
@@ -315,9 +359,9 @@ async function refreshAll() {
 }
 
 async function refreshPriceAndDepth() {
-  lastPriceRaw.value = await dex.getLastPrice();
+  lastPriceRaw.value = await dex.getLastPriceFor(DOGE);
 
-  const [bp, bs, ap, asz] = await dex.getOrderBookDepth(5);
+  const [bp, bs, ap, asz] = await dex.getOrderBookDepthFor(DOGE, 5);
 
   bids.value = bp
     .map((p, i) => ({ p, s: bs[i] }))
@@ -339,6 +383,8 @@ async function refreshPriceAndDepth() {
 async function refreshAllowances() {
   usdtAllowance.value = await usdt.allowance(account.value, DEX);
   dogeAllowance.value = await doge.allowance(account.value, DEX);
+  usdtBalance.value = await dex.quoteBalance(account.value);
+  dogeBalance.value = await dex.baseBalance(DOGE, account.value);
 }
 
 // ✅ new
@@ -433,28 +479,28 @@ async function sendTx(buildTx, label) {
 
 function limitBuy() {
   return sendTx(
-    () => dex.limitBuy(toScaledPrice(limitPrice.value), toBaseAmount(limitAmountBase.value)),
+    () => dex.limitBuyFor(DOGE, toScaledPrice(limitPrice.value), toBaseAmount(limitAmountBase.value)),
     "Limit Buy"
   );
 }
 
 function limitSell() {
   return sendTx(
-    () => dex.limitSell(toScaledPrice(limitPrice.value), toBaseAmount(limitAmountBase.value)),
+    () => dex.limitSellFor(DOGE, toScaledPrice(limitPrice.value), toBaseAmount(limitAmountBase.value)),
     "Limit Sell"
   );
 }
 
 function marketBuy() {
   return sendTx(
-    () => dex.marketBuy(toQuoteAmount(marketMaxQuoteIn.value)),
+    () => dex.marketBuyFor(DOGE, toQuoteAmount(marketMaxQuoteIn.value)),
     "Market Buy"
   );
 }
 
 function marketSell() {
   return sendTx(
-    () => dex.marketSell(toBaseAmount(marketSellAmountBase.value)),
+    () => dex.marketSellFor(DOGE, toBaseAmount(marketSellAmountBase.value)),
     "Market Sell"
   );
 }
