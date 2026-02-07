@@ -36,9 +36,13 @@
 import { ref } from "vue";
 import { ethers } from "ethers";
 
-// ====== 你的合约地址（Sepolia）======
-const DOGE_ADDRESS = "0xDB3b249a3e4D52364962e4b0f45BE999Fa94cDf1";
-const USDT_ADDRESS = "0xd85314a65BFd6Bc4CCe1AaA82C6E86350E143bbC";
+// // ====== 你的合约地址（Sepolia）======
+// const DOGE_ADDRESS = "0xDB3b249a3e4D52364962e4b0f45BE999Fa94cDf1";
+// const USDT_ADDRESS = "0xd85314a65BFd6Bc4CCe1AaA82C6E86350E143bbC";
+
+// ====== 你的合约地址（Pharos）======
+const DOGE_ADDRESS = "0xd18d98fdFaBE86a7AD0114a9985F75f9FD6992DE";
+const USDT_ADDRESS = "0x4a3FEA9668eE4a2802EaBf4808dFCdEBc474439e";
 
 // 只需要 mint + decimals（你合约里有）
 const ABI = [
@@ -81,7 +85,7 @@ async function connect() {
 
     // 可选：检查网络是否 Sepolia（chainId = 11155111）
     const net = await provider.getNetwork();
-    if (Number(net.chainId) !== 11155111) {
+    if (Number(net.chainId) !== 688689 ) {
       status.value = `Connected, but NOT Sepolia. Current chainId=${net.chainId}. Please switch to Sepolia.`;
     } else {
       status.value = "Connected to Sepolia.";

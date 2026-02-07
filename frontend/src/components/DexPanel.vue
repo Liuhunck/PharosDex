@@ -149,9 +149,14 @@ import { ref, computed, onUnmounted } from "vue";
 import { ethers } from "ethers";
 
 /* ====== addresses (replace with yours) ====== */
-const DOGE = "0xDB3b249a3e4D52364962e4b0f45BE999Fa94cDf1";
-const USDT = "0xd85314a65BFd6Bc4CCe1AaA82C6E86350E143bbC";
-const DEX  = "0x98311e042f2E8d09dFe7D4629E349f85c6ACd22E";
+// const DOGE = "0xDB3b249a3e4D52364962e4b0f45BE999Fa94cDf1";
+// const USDT = "0xd85314a65BFd6Bc4CCe1AaA82C6E86350E143bbC";
+// const DEX = "0x98311e042f2E8d09dFe7D4629E349f85c6ACd22E";
+
+/* ====== addresses (replace with yours) ====== */
+const DOGE = "0xd18d98fdFaBE86a7AD0114a9985F75f9FD6992DE";
+const USDT = "0x4a3FEA9668eE4a2802EaBf4808dFCdEBc474439e";
+const DEX  = "0xEd6b84B9FC05370C9E88C706DeA0eC37948fBC1C";
 
 /* ====== ABIs ====== */
 const ERC20_ABI = [
@@ -223,7 +228,7 @@ const cancelOrderId = ref("");
 let pollTimer = null;
 
 /* ====== computed ====== */
-const needSepolia = computed(() => account.value && Number(chainId.value) !== 11155111);
+const needSepolia = computed(() => account.value && Number(chainId.value) !== 688689);
 
 const lastPriceDisplay = computed(() => ethers.formatUnits(lastPriceRaw.value || 0n, 18));
 
@@ -259,11 +264,11 @@ async function connectWallet() {
     chainId.value = Number(net.chainId);
 
     status.value =
-      chainId.value === 11155111
+      chainId.value === 688689
         ? "Connected to Sepolia."
         : `Connected, but NOT Sepolia. chainId=${chainId.value}`;
 
-    if (chainId.value !== 11155111) return;
+    if (chainId.value !== 688689) return;
 
     dex = new ethers.Contract(DEX, DEX_ABI, signer);
     usdt = new ethers.Contract(USDT, ERC20_ABI, signer);
@@ -288,7 +293,7 @@ async function connectWallet() {
 async function switchToSepolia() {
   await window.ethereum.request({
     method: "wallet_switchEthereumChain",
-    params: [{ chainId: "0xaa36a7" }], // 11155111
+    params: [{ chainId: "0xaa36a7" }], // 688689
   });
 }
 
