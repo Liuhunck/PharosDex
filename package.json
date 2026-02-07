@@ -10,9 +10,11 @@
     "deploy:mockcoin:doge": "node scripts/deploy-mockcoin-doge.js",
     "deploy:memehub": "node scripts/deploy-memehub-pharos.js",
     "deploy:orderbook:levels": "node scripts/deploy-orderbook-levels-pharos.js",
+    "deploy:singledex": "node scripts/deploy-singledex.js",
     "verify:memehub": "node scripts/verify-memehub-pharos.js",
     "verify:mockcoin": "node scripts/verify-mockcoin.js",
-    "verify:orderbook:levels": "node scripts/verify-orderbook-levels-pharos.js"
+    "verify:orderbook:levels": "node scripts/verify-orderbook-levels-pharos.js",
+    "verify:singledex": "node scripts/verify-singledex.js"
   },
   "devDependencies": {
     "@chainlink/env-enc": "^1.0.5",
