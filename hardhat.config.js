@@ -1,5 +1,6 @@
 require("@chainlink/env-enc").config();
 require("@nomicfoundation/hardhat-toolbox");
+require("solidity-coverage");
 
 const ETH_SEPOLIA_URL = process.env.ETH_SEPOLIA_URL;
 // const PHAROS_ATLANTIC_URL = "https://atlantic.dplabs-internal.com";

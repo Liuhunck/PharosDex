@@ -47,6 +47,82 @@ describe("MultiBaseOrderBookDEXVaultLevels", function () {
         return { owner, alice, bob, carol, dex, quote, baseA, baseB };
     }
 
+    it("reverts on unsupported base and invalid params", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        // Unsupported base
+        await expect(dex.getLastPriceFor(ethers.ZeroAddress)).to.be.revertedWithCustomError(
+            dex,
+            "UnsupportedBaseToken",
+        );
+
+        await expect(dex.connect(alice).depositBaseFor(ethers.ZeroAddress, 1n)).to.be.revertedWithCustomError(
+            dex,
+            "UnsupportedBaseToken",
+        );
+
+        await expect(dex.connect(alice).limitBuyFor(ethers.ZeroAddress, u(1, 18), 1n)).to.be.revertedWithCustomError(
+            dex,
+            "UnsupportedBaseToken",
+        );
+
+        // Invalid amounts/prices
+        await expect(dex.connect(alice).depositQuote(0n)).to.be.revertedWithCustomError(dex, "InvalidAmount");
+        await expect(dex.connect(alice).withdrawQuote(0n)).to.be.revertedWithCustomError(dex, "InvalidAmount");
+
+        await expect(dex.connect(alice).depositBaseFor(baseA.target, 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+        await expect(dex.connect(alice).withdrawBaseFor(baseA.target, 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+
+        await expect(dex.connect(alice).limitBuyFor(baseA.target, 0n, u(1, 18))).to.be.revertedWithCustomError(
+            dex,
+            "InvalidPrice",
+        );
+        await expect(dex.connect(alice).limitBuyFor(baseA.target, u(1, 18), 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+
+        await expect(dex.connect(alice).limitSellFor(baseA.target, 0n, u(1, 18))).to.be.revertedWithCustomError(
+            dex,
+            "InvalidPrice",
+        );
+        await expect(dex.connect(alice).limitSellFor(baseA.target, u(1, 18), 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+
+        await expect(dex.connect(alice).marketBuyFor(baseA.target, 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+        await expect(dex.connect(alice).marketSellFor(baseA.target, 0n)).to.be.revertedWithCustomError(
+            dex,
+            "InvalidAmount",
+        );
+
+        // Insufficient balances
+        await expect(dex.connect(alice).withdrawQuote(1n)).to.be.revertedWithCustomError(dex, "InsufficientBalance");
+        await expect(dex.connect(alice).withdrawBaseFor(baseA.target, 1n)).to.be.revertedWithCustomError(
+            dex,
+            "InsufficientBalance",
+        );
+
+        await expect(dex.connect(bob).marketBuyFor(baseA.target, 1n)).to.be.revertedWithCustomError(
+            dex,
+            "InsufficientBalance",
+        );
+        await expect(dex.connect(bob).marketSellFor(baseA.target, 1n)).to.be.revertedWithCustomError(
+            dex,
+            "InsufficientBalance",
+        );
+    });
+
     it("enumerates supported bases", async function () {
         const { dex, baseA, baseB } = await deployFixture();
 
@@ -195,6 +271,158 @@ describe("MultiBaseOrderBookDEXVaultLevels", function () {
         expect(baseAfter).to.equal(baseBefore);
     });
 
+    it("cancel reverts for wrong owner and for inactive orders", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        await quote.connect(alice).approve(dex.target, u(10, 6));
+        await dex.connect(alice).depositQuote(u(10, 6));
+
+        const tx = await dex.connect(alice).limitBuyFor(baseA.target, u(2, 18), u(1, 18));
+        const receipt = await tx.wait();
+        const evt = findEventArgs(receipt, dex, "LimitOrderPlaced");
+        const orderId = evt.orderId;
+
+        await expect(dex.connect(bob).cancelOrder(orderId)).to.be.revertedWithCustomError(dex, "NotOwner");
+
+        await dex.connect(alice).cancelOrder(orderId);
+        await expect(dex.connect(alice).cancelOrder(orderId)).to.be.revertedWithCustomError(dex, "NotActive");
+    });
+
+    it("bid/ask levels are sorted; best prices update after cancels", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        // prep balances
+        await quote.connect(alice).approve(dex.target, u(1000, 6));
+        await dex.connect(alice).depositQuote(u(1000, 6));
+        await baseA.connect(bob).approve(dex.target, u(100, 18));
+        await dex.connect(bob).depositBaseFor(baseA.target, u(100, 18));
+
+        // Keep bids strictly below asks to avoid matching in this test.
+        const bidP1 = u(1, 18);
+        const bidP2 = u(11, 17); // 1.1
+        const bidP3 = u(9, 17); // 0.9
+
+        // create three bid levels (no asks so no matching)
+        const b1 = await (await dex.connect(alice).limitBuyFor(baseA.target, bidP1, u(1, 18))).wait();
+        const b1e = findEventArgs(b1, dex, "LimitOrderPlaced");
+        const b1id = b1e.orderId;
+
+        const b2 = await (await dex.connect(alice).limitBuyFor(baseA.target, bidP2, u(1, 18))).wait();
+        const b2e = findEventArgs(b2, dex, "LimitOrderPlaced");
+        const b2id = b2e.orderId;
+
+        await (await dex.connect(alice).limitBuyFor(baseA.target, bidP3, u(1, 18))).wait();
+
+        const depth1 = await dex.getOrderBookDepthFor(baseA.target, 5);
+        expect(depth1[0][0]).to.equal(bidP2);
+        expect(depth1[0][1]).to.equal(bidP1);
+        expect(depth1[0][2]).to.equal(bidP3);
+
+        // create three ask levels (still above best bid so no crossing)
+        const askP1 = u(2, 18);
+        const askP2 = u(18, 17); // 1.8
+        const askP3 = u(25, 17); // 2.5
+
+        await dex.connect(bob).limitSellFor(baseA.target, askP1, u(1, 18));
+        const a2 = await (await dex.connect(bob).limitSellFor(baseA.target, askP2, u(1, 18))).wait();
+        const a2e = findEventArgs(a2, dex, "LimitOrderPlaced");
+        const a2id = a2e.orderId;
+        await dex.connect(bob).limitSellFor(baseA.target, askP3, u(1, 18));
+
+        const depth2 = await dex.getOrderBookDepthFor(baseA.target, 5);
+        expect(depth2[2][0]).to.equal(askP2);
+        expect(depth2[2][1]).to.equal(askP1);
+        expect(depth2[2][2]).to.equal(askP3);
+
+        // cancel current best bid (bidP2), best should move to bidP1
+        await dex.connect(alice).cancelOrder(b2id);
+        const depth3 = await dex.getOrderBookDepthFor(baseA.target, 5);
+        expect(depth3[0][0]).to.equal(bidP1);
+
+        // cancel current best ask (askP2), best should move to askP1
+        await dex.connect(bob).cancelOrder(a2id);
+        const depth4 = await dex.getOrderBookDepthFor(baseA.target, 5);
+        expect(depth4[2][0]).to.equal(askP1);
+
+        // cancel remaining best bid too, ensure depth updates (no assumption about other bids)
+        await dex.connect(alice).cancelOrder(b1id);
+    });
+
+    it("price improvement refunds unused lockedQuote when bid is fully filled", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        // Alice deposits quote and places a bid @ 3.0
+        await quote.connect(alice).approve(dex.target, u(10, 6));
+        await dex.connect(alice).depositQuote(u(10, 6));
+        const before = await dex.quoteBalance(alice.address);
+
+        const bidPrice = u(3, 18);
+        const askPrice = u(2, 18);
+        const amount = u(1, 18);
+
+        await (await dex.connect(alice).limitBuyFor(baseA.target, bidPrice, amount)).wait();
+        const afterLock = await dex.quoteBalance(alice.address);
+        expect(afterLock).to.equal(before - u(3, 6));
+
+        // Bob deposits base and sells @ 2.0, should match at 2.0 and refund 1.0 quote
+        await baseA.connect(bob).approve(dex.target, u(10, 18));
+        await dex.connect(bob).depositBaseFor(baseA.target, u(10, 18));
+        await (await dex.connect(bob).limitSellFor(baseA.target, askPrice, amount)).wait();
+
+        const afterTrade = await dex.quoteBalance(alice.address);
+        expect(afterTrade).to.equal(before - u(2, 6));
+
+        expect(await dex.baseBalance(alice.address, baseA.target)).to.equal(amount);
+        expect(await dex.getLastPriceFor(baseA.target)).to.equal(askPrice);
+    });
+
+    it("marketBuy does not spend quote if it cannot afford 1 base unit at best ask", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        // Bob posts an ask with a very high price
+        await baseA.connect(bob).approve(dex.target, u(1, 18));
+        await dex.connect(bob).depositBaseFor(baseA.target, u(1, 18));
+        // Price high enough so baseForQuote(1, price) == 0 with quoteDecimals=6 and baseDecimals=18.
+        await dex.connect(bob).limitSellFor(baseA.target, u("10000000000000", 18), u(1, 18));
+
+        // Alice has only 1 micro-quote
+        await quote.connect(alice).approve(dex.target, 1n);
+        await dex.connect(alice).depositQuote(1n);
+        const qBefore = await dex.quoteBalance(alice.address);
+
+        await dex.connect(alice).marketBuyFor(baseA.target, 1n);
+        const qAfter = await dex.quoteBalance(alice.address);
+
+        expect(qAfter).to.equal(qBefore);
+        expect(await dex.baseBalance(alice.address, baseA.target)).to.equal(0n);
+    });
+
+    it("getOrderBookDepthFor defaults topN=10 when passed 0", async function () {
+        const { dex, baseA } = await deployFixture();
+        const depth = await dex.getOrderBookDepthFor(baseA.target, 0);
+        expect(depth[0].length).to.equal(10);
+        expect(depth[1].length).to.equal(10);
+        expect(depth[2].length).to.equal(10);
+        expect(depth[3].length).to.equal(10);
+    });
+
+    it("works with different base decimals (8) for quote/base conversions", async function () {
+        const { alice, bob, dex, quote, baseB } = await deployFixture();
+
+        // Bob sells 1.0 baseB (8 decimals) at 30000 quote
+        await baseB.connect(bob).approve(dex.target, u(2, 8));
+        await dex.connect(bob).depositBaseFor(baseB.target, u(2, 8));
+        await dex.connect(bob).limitSellFor(baseB.target, u(30000, 18), u(1, 8));
+
+        // Alice buys with exactly 30000 quote
+        await quote.connect(alice).approve(dex.target, u(30000, 6));
+        await dex.connect(alice).depositQuote(u(30000, 6));
+
+        await dex.connect(alice).marketBuyFor(baseB.target, u(30000, 6));
+        expect(await dex.baseBalance(alice.address, baseB.target)).to.equal(u(1, 8));
+        expect(await dex.quoteBalance(alice.address)).to.equal(0n);
+    });
+
     it("depth aggregation groups by price and is isolated per base", async function () {
         const { alice, dex, baseA, baseB } = await deployFixture();
 
@@ -228,5 +456,33 @@ describe("MultiBaseOrderBookDEXVaultLevels", function () {
         const depthB1 = await dex.getOrderBookDepthFor(baseB.target, 5);
         expect(depthB1[2][0]).to.equal(u(30000, 18));
         expect(depthB1[3][0]).to.equal(u(1, 8));
+    });
+
+    it("open orders view excludes filled and cancelled orders", async function () {
+        const { alice, bob, dex, quote, baseA } = await deployFixture();
+
+        // Seller deposits base and posts sell 2
+        await baseA.connect(alice).approve(dex.target, u(10, 18));
+        await dex.connect(alice).depositBaseFor(baseA.target, u(10, 18));
+        const sellTx = await dex.connect(alice).limitSellFor(baseA.target, u(2, 18), u(2, 18));
+        const sellRc = await sellTx.wait();
+        const sellEvt = findEventArgs(sellRc, dex, "LimitOrderPlaced");
+        const sellId = sellEvt.orderId;
+
+        // Buyer deposits quote and buys 1 via limit buy (crosses)
+        await quote.connect(bob).approve(dex.target, u(100, 6));
+        await dex.connect(bob).depositQuote(u(100, 6));
+        await dex.connect(bob).limitBuyFor(baseA.target, u(3, 18), u(1, 18));
+
+        // Seller has 1 remaining open
+        const openSeller = await dex.getOpenOrdersOfFor(alice.address, baseA.target);
+        expect(openSeller.length).to.equal(1);
+        expect(openSeller[0].id).to.equal(sellId);
+        expect(openSeller[0].remainingBase).to.equal(u(1, 18));
+
+        // Cancel and ensure it's gone
+        await dex.connect(alice).cancelOrder(sellId);
+        const openSeller2 = await dex.getOpenOrdersOfFor(alice.address, baseA.target);
+        expect(openSeller2.length).to.equal(0);
     });
 });

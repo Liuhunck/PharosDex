@@ -6,6 +6,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "coverage": "hardhat coverage",
     "deploy:mockcoin:usdt": "node scripts/deploy-mockcoin-usdt.js",
     "deploy:mockcoin:doge": "node scripts/deploy-mockcoin-doge.js",
     "deploy:mockcoin:btc": "node scripts/deploy-mockcoin-btc.js",
