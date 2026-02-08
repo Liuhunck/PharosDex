@@ -3,10 +3,10 @@ require("@chainlink/env-enc").config();
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-// Hardcoded MemeHubToken deploy config (edit this file to change behavior)
+// Hardcoded MockERC20 deploy config (edit this file to change behavior)
 const CONTRACT_NAME = "MockERC20";
-const TOKEN_NAME = "USDT";
-const TOKEN_SYMBOL = "USDT";
+const TOKEN_NAME = "Emotion";
+const TOKEN_SYMBOL = "EMO";
 const TOKEN_DECIMALS = 18;
 
 const OUT_FILE_REL = `deployments/pharos_atlantic.${CONTRACT_NAME}.${TOKEN_SYMBOL}.latest.json`;

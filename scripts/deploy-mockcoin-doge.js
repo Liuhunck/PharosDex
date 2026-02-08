@@ -9,7 +9,7 @@ const TOKEN_NAME = "DOGECOIN";
 const TOKEN_SYMBOL = "DOGE";
 const TOKEN_DECIMALS = 18;
 
-const OUT_FILE_REL = `deployments/pharos_atlantic.${CONTRACT_NAME}.latest.json`;
+const OUT_FILE_REL = `deployments/pharos_atlantic.${CONTRACT_NAME}.${TOKEN_SYMBOL}.latest.json`;
 
 function toRepoPath(p) {
     return path.isAbsolute(p) ? p : path.join(__dirname, "..", p);
@@ -33,7 +33,7 @@ async function main() {
     const outFile = toRepoPath(OUT_FILE_REL);
     const ctorArgs = JSON.stringify([TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS]);
 
-    console.log(`[INFO] Deploy ${CONTRACT_NAME}`);
+    console.log(`[INFO] Deploy ${CONTRACT_NAME} (${TOKEN_SYMBOL})`);
     console.log(`[INFO] RPC=${rpcUrl}`);
     console.log(`[INFO] Out=${outFile}`);
     console.log(`[INFO] Constructor args=${ctorArgs}`);

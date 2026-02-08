@@ -1,11 +1,13 @@
 require("@chainlink/env-enc").config();
 
+const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { parseArgv } = require("./lib/pharos-evm-helpers");
 
 // Hardcoded MockERC20 verify config (edit this file to change behavior)
 const CONTRACT_NAME = "MockERC20";
-const DEPLOYMENT_FILE_REL = `deployments/pharos_atlantic.${CONTRACT_NAME}.latest.json`;
+const DEFAULT_DEPLOYMENT_FILE_REL = `deployments/pharos_atlantic.${CONTRACT_NAME}.latest.json`;
 
 const VERIFY_API_BASE = "https://api.socialscan.io/pharos-atlantic-testnet";
 const VERIFY_BROWSER_BASE = "https://atlantic.pharosscan.xyz";
@@ -22,7 +24,22 @@ function runNodeScript(scriptFileName, args) {
 }
 
 async function main() {
-    const deploymentFile = toRepoPath(DEPLOYMENT_FILE_REL);
+    const args = parseArgv(process.argv);
+    const symbol = args.symbol || args.s || process.env.MOCKCOIN_SYMBOL;
+
+    const deploymentRel = args.deployment
+        ? String(args.deployment)
+        : symbol
+        ? `deployments/pharos_atlantic.${CONTRACT_NAME}.${String(symbol).toUpperCase()}.latest.json`
+        : DEFAULT_DEPLOYMENT_FILE_REL;
+
+    const deploymentFile = toRepoPath(deploymentRel);
+    if (!fs.existsSync(deploymentFile)) {
+        throw new Error(
+            `Deployment file not found: ${deploymentFile}\n` +
+                `Tip: pass --symbol <SYMBOL> (e.g. --symbol DHC), or --deployment <path/to/deployment.json>`,
+        );
+    }
 
     const verifyArgs = [
         "--deployment",
